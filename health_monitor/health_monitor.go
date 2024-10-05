@@ -21,10 +21,16 @@ type HealthMonitor interface {
 	// Returns an error if there is a problem starting the health monitor.
 	// To stop the health monitor, call Stop.
 	Start() (err error)
-	// EnterUnhealthyChan returns a channel that receives newly unhealthy backends.
-	EnterUnhealthyChan() (<-chan *HealthNoti, error)
-	// EnterHealthyChan returns a channel that receives newly healthy backends.
-	EnterHealthyChan() (<-chan *HealthNoti, error)
+	// UnhealthyChan returns a channel that receives newly unhealthy backends.
+	// Backends that are removed from the health monitor are also sent to this channel,
+	// but its timestamp is nil to indicate that the backend is indefinitely unreachable.
+	// If initial health is set to "Unhealthy", backends that are newly added are
+	// also sent to this channel.
+	UnhealthyChan() (<-chan *HealthNoti, error)
+	// HealthyChan returns a channel that receives newly healthy backends.
+	// If initial health is set to "Healthy", backends that are newly added are
+	// also sent to this channel.
+	HealthyChan() (<-chan *HealthNoti, error)
 	// Stop stops the health monitor.
 	Stop()
 	// IsHealthy returns true if the given backend is healthy.
@@ -151,8 +157,8 @@ func (h *healthMonitorImpl) Start() (err error) {
 func (h *healthMonitorImpl) Stop() {
 	h.cfg.logger.Info().Msg("Stopping health monitor...")
 	h.cancelCtx()
-	h.outputChans.close()
 	<-h.tickerStopped
+	h.outputChans.close()
 }
 
 func (h *healthMonitorImpl) IsHealthy(name string) bool {
@@ -207,11 +213,11 @@ func (h *healthMonitorImpl) Remove(backends ...*Backend) {
 	}
 }
 
-func (h *healthMonitorImpl) EnterUnhealthyChan() (<-chan *HealthNoti, error) {
+func (h *healthMonitorImpl) UnhealthyChan() (<-chan *HealthNoti, error) {
 	return h.outputChans.unhealthyChannel()
 }
 
-func (h *healthMonitorImpl) EnterHealthyChan() (<-chan *HealthNoti, error) {
+func (h *healthMonitorImpl) HealthyChan() (<-chan *HealthNoti, error) {
 	return h.outputChans.healthyChannel()
 }
 

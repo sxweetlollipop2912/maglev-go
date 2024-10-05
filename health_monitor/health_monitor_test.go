@@ -180,9 +180,9 @@ func TestHealthMonitorChannels(t *testing.T) {
 	err = hm.Start()
 	assert.NoError(t, err)
 
-	unhealthyChan, err := hm.EnterUnhealthyChan()
+	unhealthyChan, err := hm.UnhealthyChan()
 	assert.NoError(t, err)
-	healthyChan, err := hm.EnterHealthyChan()
+	healthyChan, err := hm.HealthyChan()
 	assert.NoError(t, err)
 
 	// Wait for the backend to become unhealthy

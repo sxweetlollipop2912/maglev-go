@@ -26,16 +26,16 @@ health-monitor:
   # - http: Use HTTP for health checks.
   # - https: Use HTTPS for health checks.
   # - tcp: Use TCP for health checks.
-  # - icmp: Use ICMP for health checks (e.g., ping).
+  # - icmp: Use ICMP for health checks (i.e., ping).
   # Default: "http"
   protocol: "http"
   # healthy_initially is a flag that indicates whether the backend should be considered
   # healthy when first added, before any health checks.
   # Default: true
   healthy_initially: true
-  # accept_status_codes is a list of HTTP status code regex patterns that indicate a healthy response.
+  # accept_status_codes is a list of HTTP status code REGEX PATTERNS that indicate a healthy response.
   # This field is only relevant for HTTP/HTTPS health checks.
   # Example: [200, 201, 202] means status codes 200, 201, and 202 are considered healthy.
-  # Default: [2*+]
+  # Default: [2*+] (any 2xx status code)
   accept_status_codes:
     - 200
