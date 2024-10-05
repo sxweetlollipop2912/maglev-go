@@ -62,6 +62,7 @@ func (c *consistentHashImpl) Size() uint32 {
 	return c.size
 }
 
+// Add runs in O(n log n) time.
 func (c *consistentHashImpl) Add(backends ...string) {
 	c.backendsMtx.Lock()
 
@@ -86,6 +87,7 @@ func (c *consistentHashImpl) Add(backends ...string) {
 	c.computeLookupTable()
 }
 
+// Remove runs in O(n log n) time.
 func (c *consistentHashImpl) Remove(backends ...string) {
 	c.backendsMtx.Lock()
 
@@ -101,6 +103,8 @@ func (c *consistentHashImpl) Remove(backends ...string) {
 	c.computeLookupTable()
 }
 
+// Hash runs in O(1) amortized time,
+// but if the lookup table is not initialized, it runs in O(n log n) time.
 func (c *consistentHashImpl) Hash(key uint64) string {
 	c.backendsMtx.RLock()
 	defer c.backendsMtx.RUnlock()
@@ -123,15 +127,13 @@ func (c *consistentHashImpl) Hash(key uint64) string {
 
 // computeLookupTable computes the lookup table for the consistent hash.
 // Assumes backendsMtx is read-locked, and lookupMtx is write-locked.
+// Runs in O(n log n) time.
 func (c *consistentHashImpl) computeLookupTable() {
-	// Initialize the lookup table
+	// Re-initialize the lookup table
 	c.lookup = make([]string, c.Size())
 
 	// Initialize next array
 	next := make([]uint32, len(c.backends))
-	for i := range next {
-		next[i] = 0
-	}
 
 	// Initialize entry array
 	entry := make([]int, c.Size())
@@ -143,7 +145,7 @@ func (c *consistentHashImpl) computeLookupTable() {
 	backends := c.getBackendsAsSlice()
 	var n uint32 = 0
 	for {
-		for i := 0; i < len(c.backends); i++ {
+		for i := 0; i < len(backends); i++ {
 			// Get the next candidate from permutation
 			candidate := c.permutationAt(backends[i], next[i])
 
@@ -176,6 +178,7 @@ func (c *consistentHashImpl) permutationAt(name string, j uint32) uint32 {
 
 // getBackendsAsSlice returns the backends as a sorted slice.
 // Assumes backendsMtx is read-locked.
+// Runs in O(n log n) time.
 func (c *consistentHashImpl) getBackendsAsSlice() []string {
 	backends := make([]string, 0, len(c.backends))
 	for backend := range c.backends {
