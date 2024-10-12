@@ -50,20 +50,6 @@ func WithTimeout(timeout time.Duration) Option {
 	}
 }
 
-func WithHttpPath(path string) Option {
-	return func(c *Config) error {
-		c.HttpPath = path
-		return nil
-	}
-}
-
-func WithProtocol(protocol Protocol) Option {
-	return func(c *Config) error {
-		c.Protocol = protocol
-		return nil
-	}
-}
-
 func WithAcceptStatusCodes(codePatterns ...string) Option {
 	return func(c *Config) error {
 		c.AcceptStatusCodes = codePatterns
@@ -88,6 +74,13 @@ func EnableHealthyChannel() Option {
 func EnableUnhealthyChannel() Option {
 	return func(c *Config) error {
 		c.EnableUnhealthyChannel = true
+		return nil
+	}
+}
+
+func WithBackend(cfg *BackendConfig) Option {
+	return func(c *Config) error {
+		c.Backends = append(c.Backends, cfg)
 		return nil
 	}
 }

@@ -16,57 +16,54 @@ import (
 func TestHealthMonitorDifferentScenarios(t *testing.T) {
 	tests := []struct {
 		name            string
-		setupContainers func(t *testing.T, monitor HealthMonitor) ([]*Backend, func())
+		setupContainers func(t *testing.T, monitor HealthMonitor) ([]*BackendConfig, func())
 		expectedStates  map[string][]bool // A list of expected states before and after transitions
 		checkCnt        int
-		protocol        Protocol
 	}{
 		{
 			name: "health check for a healthy HTTP backend",
-			setupContainers: func(t *testing.T, _ HealthMonitor) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T, _ HealthMonitor) ([]*BackendConfig, func()) {
 				_, backend, teardown := setupHTTPBackend(t, "http-backend", 8080, false) // HTTP with 200 OK
-				return []*Backend{backend}, teardown
+				return []*BackendConfig{backend}, teardown
 			},
 			expectedStates: map[string][]bool{
 				"http-backend": {true}, // Initial state
 			},
 			checkCnt: 1,
-			protocol: HTTP,
 		},
 		{
 			name: "health check for an unhealthy HTTP backend",
-			setupContainers: func(t *testing.T, _ HealthMonitor) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T, _ HealthMonitor) ([]*BackendConfig, func()) {
 				_, backend, teardown := setupHTTPBackend(t, "http-backend", 8081, true)
-				return []*Backend{backend}, teardown
+				return []*BackendConfig{backend}, teardown
 			},
 			expectedStates: map[string][]bool{
 				"http-backend": {false}, // Initial state
 			},
 			checkCnt: 1,
-			protocol: HTTP,
 		},
 		{
 			name: "health check for a healthy, but then offline HTTP backend",
-			setupContainers: func(t *testing.T, _ HealthMonitor) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T, _ HealthMonitor) ([]*BackendConfig, func()) {
 				_, backend, teardown := setupHTTPBackend(t, "http-backend", 8082, false) // Start healthy
 				go func() {
 					time.Sleep(3 * time.Second)
 					teardown() // Turn backend offline after 3 seconds
 				}()
-				return []*Backend{backend}, func() {}
+				return []*BackendConfig{backend}, func() {}
 			},
 			expectedStates: map[string][]bool{
 				"http-backend": {true, false}, // Initially healthy
 			},
 			checkCnt: 2,
-			protocol: HTTP,
 		},
 		{
 			name: "health check for an offline, but then healthy HTTP backend",
-			setupContainers: func(t *testing.T, hm HealthMonitor) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T, hm HealthMonitor) ([]*BackendConfig, func()) {
 				go func() {
 					_, backend, teardown := setupHTTPBackend(t, "http-backend", 8083, true)
-					hm.Add(backend)
+					err := hm.Add(backend)
+					assert.NoError(t, err)
 
 					time.Sleep(4 * time.Second)
 					teardown()
@@ -74,20 +71,19 @@ func TestHealthMonitorDifferentScenarios(t *testing.T) {
 					time.Sleep(7 * time.Second)
 					teardown()
 				}()
-				return []*Backend{}, func() {}
+				return []*BackendConfig{}, func() {}
 			},
 			expectedStates: map[string][]bool{
 				"http-backend": {false, true}, // Initially offline
 			},
 			checkCnt: 2,
-			protocol: HTTP,
 		},
 		{
 			name: "health check for multiple backends, some healthy, some unhealthy",
-			setupContainers: func(t *testing.T, _ HealthMonitor) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T, _ HealthMonitor) ([]*BackendConfig, func()) {
 				_, healthyBackend, healthyTeardown := setupHTTPBackend(t, "http-backend-healthy", 8085, false)
 				_, unhealthyBackend, unhealthyTeardown := setupHTTPBackend(t, "http-backend-unhealthy", 8086, true)
-				return []*Backend{healthyBackend, unhealthyBackend}, func() {
+				return []*BackendConfig{healthyBackend, unhealthyBackend}, func() {
 					healthyTeardown()
 					unhealthyTeardown()
 				}
@@ -97,29 +93,28 @@ func TestHealthMonitorDifferentScenarios(t *testing.T) {
 				"http-backend-unhealthy": {false},
 			},
 			checkCnt: 1,
-			protocol: HTTP,
 		},
 		{
 			name: "health check but add and remove backends while running",
-			setupContainers: func(t *testing.T, hm HealthMonitor) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T, hm HealthMonitor) ([]*BackendConfig, func()) {
 				_, backend, teardown := setupHTTPBackend(t, "http-backend", 8087, false) // Initially healthy
 				go func() {
 					time.Sleep(5 * time.Second)
 					_, backendToAdd, addTeardown := setupHTTPBackend(t, "http-backend-2", 8088, false) // Add healthy backend
-					hm.Add(backendToAdd)
+					err := hm.Add(backendToAdd)
+					assert.NoError(t, err)
 					defer addTeardown()
 					time.Sleep(7 * time.Second)
-					hm.Remove(backend)
+					hm.Remove(backend.Name)
 					time.Sleep(5 * time.Second)
 				}()
-				return []*Backend{backend}, teardown
+				return []*BackendConfig{backend}, teardown
 			},
 			expectedStates: map[string][]bool{
 				"http-backend":   {true, true, false},
 				"http-backend-2": {false, true, true},
 			},
 			checkCnt: 3,
-			protocol: HTTP,
 		},
 	}
 
@@ -127,7 +122,6 @@ func TestHealthMonitorDifferentScenarios(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			hm, err := NewHealthMonitor(ctx,
-				WithProtocol(tt.protocol),
 				WithCheckInterval(1*time.Second),
 			)
 			assert.NoError(t, err)
@@ -137,7 +131,8 @@ func TestHealthMonitorDifferentScenarios(t *testing.T) {
 			defer teardown()
 
 			// Add backends to the health monitor
-			hm.Add(backends...)
+			err = hm.Add(backends...)
+			assert.NoError(t, err)
 
 			// Start the health monitor
 			err = hm.Start()
@@ -162,7 +157,6 @@ func TestHealthMonitorDifferentScenarios(t *testing.T) {
 func TestHealthMonitorChannels(t *testing.T) {
 	ctx := context.Background()
 	hm, err := NewHealthMonitor(ctx,
-		WithProtocol(HTTP),
 		EnableHealthyChannel(),
 		EnableUnhealthyChannel(),
 		WithCheckInterval(1*time.Second),
@@ -174,7 +168,8 @@ func TestHealthMonitorChannels(t *testing.T) {
 	defer teardown()
 
 	// Add backend to the health monitor
-	hm.Add(backend)
+	err = hm.Add(backend)
+	assert.NoError(t, err)
 
 	// Start the health monitor
 	err = hm.Start()
@@ -199,7 +194,8 @@ func TestHealthMonitorChannels(t *testing.T) {
 	_, backendHealthy, teardown := setupHTTPBackend(t, "http-backend", 8090, false) // Now healthy
 	defer teardown()
 
-	hm.Add(backendHealthy)
+	err = hm.Add(backendHealthy)
+	assert.NoError(t, err)
 
 	// Wait for the backend to become healthy
 	select {
@@ -216,52 +212,47 @@ func TestHealthMonitorChannels(t *testing.T) {
 func TestHealthMonitorDifferentProtocols(t *testing.T) {
 	tests := []struct {
 		name            string
-		setupContainers func(t *testing.T) ([]*Backend, func())
+		setupContainers func(t *testing.T) ([]*BackendConfig, func())
 		expectedStates  map[string]bool
-		protocol        Protocol
 	}{
 		{
 			name: "health check for a healthy HTTP backend",
-			setupContainers: func(t *testing.T) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T) ([]*BackendConfig, func()) {
 				_, backend, teardown := setupHTTPBackend(t, "http-backend", 8091, false) // HTTP with 200 OK
-				return []*Backend{backend}, teardown
+				return []*BackendConfig{backend}, teardown
 			},
 			expectedStates: map[string]bool{"http-backend": true},
-			protocol:       HTTP,
 		},
 		{
 			name: "health check for an unhealthy HTTP backend",
-			setupContainers: func(t *testing.T) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T) ([]*BackendConfig, func()) {
 				_, backend, teardown := setupHTTPBackend(t, "http-backend", 8092, true) // HTTP with 500 Internal Server Error
-				return []*Backend{backend}, teardown
+				return []*BackendConfig{backend}, teardown
 			},
 			expectedStates: map[string]bool{"http-backend": false},
-			protocol:       HTTP,
 		},
 		{
 			name: "health check for a healthy TCP backend",
-			setupContainers: func(t *testing.T) ([]*Backend, func()) {
+			setupContainers: func(t *testing.T) ([]*BackendConfig, func()) {
 				_, backend, teardown := setupTCPBackend(t) // TCP server
-				return []*Backend{backend}, teardown
+				return []*BackendConfig{backend}, teardown
 			},
 			expectedStates: map[string]bool{"tcp-backend": true},
-			protocol:       TCP,
 		},
 		{
 			name: "health check for a healthy ICMP backend",
-			setupContainers: func(t *testing.T) ([]*Backend, func()) {
-				backend := createICMPBackend(t, "8.8.8.8") // Google public DNS as ICMP
-				return []*Backend{backend}, func() {}      // No teardown needed for real services
+			setupContainers: func(t *testing.T) ([]*BackendConfig, func()) {
+				backend := createICMPBackend(t, "8.8.8.8")  // Google public DNS as ICMP
+				return []*BackendConfig{backend}, func() {} // No teardown needed for real services
 			},
 			expectedStates: map[string]bool{"icmp-backend": true},
-			protocol:       ICMP,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			hm, err := NewHealthMonitor(ctx, WithProtocol(tt.protocol), WithCheckInterval(1*time.Second))
+			hm, err := NewHealthMonitor(ctx, WithCheckInterval(1*time.Second))
 			assert.NoError(t, err)
 
 			// Setup the containers
@@ -269,7 +260,8 @@ func TestHealthMonitorDifferentProtocols(t *testing.T) {
 			defer teardown()
 
 			// Add backends to the health monitor
-			hm.Add(backends...)
+			err = hm.Add(backends...)
+			assert.NoError(t, err)
 
 			// Start the health monitor
 			err = hm.Start()
@@ -290,7 +282,7 @@ func TestHealthMonitorDifferentProtocols(t *testing.T) {
 }
 
 // Helper function to create an HTTP backend using testcontainers-go
-func setupHTTPBackend(t *testing.T, name string, port int, dontSetup bool) (testcontainers.Container, *Backend, func()) {
+func setupHTTPBackend(t *testing.T, name string, port int, dontSetup bool) (testcontainers.Container, *BackendConfig, func()) {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
 		Image:        "nginx", // Use NGINX as a simple HTTP server
@@ -314,9 +306,10 @@ func setupHTTPBackend(t *testing.T, name string, port int, dontSetup bool) (test
 
 	// Create a Backend object pointing to the test container
 	backendURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", host, port))
-	backend := &Backend{
-		Url:  *backendURL,
-		Name: name,
+	backend := &BackendConfig{
+		Url:      *backendURL,
+		Name:     name,
+		Protocol: HTTP,
 	}
 
 	teardown := func() {
@@ -332,7 +325,7 @@ func setupHTTPBackend(t *testing.T, name string, port int, dontSetup bool) (test
 }
 
 // Helper function to create a TCP backend using testcontainers-go
-func setupTCPBackend(t *testing.T) (testcontainers.Container, *Backend, func()) {
+func setupTCPBackend(t *testing.T) (testcontainers.Container, *BackendConfig, func()) {
 	ctx := context.Background()
 	req := testcontainers.ContainerRequest{
 		Image:        "redis", // Redis exposes TCP on port 6379
@@ -353,9 +346,10 @@ func setupTCPBackend(t *testing.T) (testcontainers.Container, *Backend, func()) 
 
 	// Create a Backend object pointing to the test container
 	backendURL, _ := url.Parse(fmt.Sprintf("tcp://%s:%s", host, port.Port()))
-	backend := &Backend{
-		Url:  *backendURL,
-		Name: "tcp-backend",
+	backend := &BackendConfig{
+		Url:      *backendURL,
+		Name:     "tcp-backend",
+		Protocol: TCP,
 	}
 
 	teardown := func() {
@@ -366,10 +360,11 @@ func setupTCPBackend(t *testing.T) (testcontainers.Container, *Backend, func()) 
 }
 
 // Helper function to create an ICMP backend (Google public DNS for example)
-func createICMPBackend(_ *testing.T, address string) *Backend {
+func createICMPBackend(_ *testing.T, address string) *BackendConfig {
 	backendURL, _ := url.Parse(fmt.Sprintf("icmp://%s", address))
-	return &Backend{
-		Url:  *backendURL,
-		Name: "icmp-backend",
+	return &BackendConfig{
+		Url:      *backendURL,
+		Name:     "icmp-backend",
+		Protocol: ICMP,
 	}
 }

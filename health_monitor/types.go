@@ -7,8 +7,7 @@ import (
 )
 
 type Backend struct {
-	Url  url.URL
-	Name string
+	Cfg *BackendConfig
 
 	// runtime state
 	healthy bool
@@ -28,8 +27,8 @@ type HealthNoti struct {
 
 func (b *Backend) toNoti(opts ...func(noti *HealthNoti)) *HealthNoti {
 	noti := &HealthNoti{
-		Url:       b.Url,
-		Name:      b.Name,
+		Url:       b.Cfg.Url,
+		Name:      b.Cfg.Name,
 		Healthy:   b.healthy,
 		Timestamp: ptr.ToPtr(time.Now()),
 	}

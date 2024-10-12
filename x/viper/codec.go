@@ -4,6 +4,7 @@ import (
 	"github.com/inhies/go-bytesize"
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/viper"
+	"net/url"
 	"reflect"
 )
 
@@ -14,6 +15,7 @@ import (
 //	 mapstructure.ComposeDecodeHookFunc(
 //			mapstructure.StringToTimeDurationHookFunc(),
 //			StringToByteSizeHookFunc(),
+//			StringToUrlHookFunc(),
 //		)
 //
 // as default decode hook funcs.
@@ -26,6 +28,7 @@ func Unmarshal(v *viper.Viper, rawVal interface{}, opts ...viper.DecoderConfigOp
 				mapstructure.ComposeDecodeHookFunc(
 					mapstructure.StringToTimeDurationHookFunc(),
 					StringToByteSizeHookFunc(),
+					StringToUrlHookFunc(),
 				),
 			),
 		)...,
@@ -49,6 +52,31 @@ func StringToByteSizeHookFunc() mapstructure.DecodeHookFunc {
 		}
 
 		sDec, err := bytesize.Parse(data.(string))
+		if err != nil {
+			return nil, err
+		}
+
+		return sDec, nil
+	}
+}
+
+// StringToUrlHookFunc returns a DecodeHookFunc that converts
+// strings to url.URL.
+func StringToUrlHookFunc() mapstructure.DecodeHookFunc {
+	return func(
+		f reflect.Type,
+		t reflect.Type,
+		data interface{},
+	) (interface{}, error) {
+		if f.Kind() != reflect.String {
+			return data, nil
+		}
+
+		if t != reflect.TypeOf(url.URL{}) {
+			return data, nil
+		}
+
+		sDec, err := url.Parse(data.(string))
 		if err != nil {
 			return nil, err
 		}

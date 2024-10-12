@@ -36,9 +36,11 @@ type HealthMonitor interface {
 	// IsHealthy returns true if the given backend is healthy.
 	IsHealthy(name string) bool
 	// Add adds the given backends to the health monitor.
-	Add(backends ...*Backend)
+	// If a backend already exists, it is ignored.
+	// If returning an error, the health monitor is unchanged.
+	Add(backends ...*BackendConfig) error
 	// Remove removes the given backends from the health monitor.
-	Remove(backends ...*Backend)
+	Remove(backends ...string)
 	// Size returns the number of backends in the health monitor.
 	Size() int
 	// LastCheckedAt returns the last time the health monitor checked the backends.
@@ -89,6 +91,17 @@ func NewHealthMonitor(ctx context.Context, opts ...Option) (HealthMonitor, error
 			Msg("Connection timeout is greater than 2/3 interval. Setting timeout to 2/3 interval.")
 		cfg.Timeout = cfg.Interval * 2 / 3
 	}
+	for i := range cfg.Backends {
+		be := cfg.Backends[i]
+		if be.Timeout > cfg.Interval*2/3 {
+			cfg.logger.Warn().
+				Str("backend", be.Name).
+				Dur("timeout", be.Timeout).
+				Dur("interval", cfg.Interval).
+				Msg("Connection timeout of backend is greater than 2/3 interval. Setting timeout to 2/3 interval.")
+			be.Timeout = cfg.Interval * 2 / 3
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	return &healthMonitorImpl{
@@ -113,9 +126,25 @@ func (h *healthMonitorImpl) Start() (err error) {
 		}
 	}()
 
+	if len(h.cfg.Backends) > 0 {
+		h.cfg.logger.Info().
+			Int("backends", len(h.cfg.Backends)).
+			Msgf("Adding %d backends...", len(h.cfg.Backends))
+
+		beCfgs := make([]*BackendConfig, 0, len(h.cfg.Backends))
+		for _, beCfg := range h.cfg.Backends {
+			beCfgs = append(beCfgs, beCfg)
+		}
+
+		if err = h.Add(beCfgs...); err != nil {
+			return err
+		}
+	}
+
 	h.cfg.logger.Info().
 		Interface("config", h.cfg).
 		Msg("Starting health monitor...")
+
 	go func() {
 		defer close(h.tickerStopped)
 
@@ -171,45 +200,88 @@ func (h *healthMonitorImpl) IsHealthy(name string) bool {
 	return false
 }
 
-func (h *healthMonitorImpl) Add(backends ...*Backend) {
+func (h *healthMonitorImpl) Add(beConfigs ...*BackendConfig) error {
+	for i := range beConfigs {
+		if err := defaults.Set(beConfigs[i]); err != nil {
+			return err
+		}
+
+		// name and url are required
+		if beConfigs[i].Name == "" {
+			return fmt.Errorf("backend name is required")
+		}
+		if beConfigs[i].Url.String() == "" {
+			return fmt.Errorf("backend URL is required")
+		}
+
+		// set global defaults if not set
+		if beConfigs[i].Timeout > h.cfg.Interval*2/3 {
+			h.cfg.logger.Warn().
+				Str("backend", beConfigs[i].Name).
+				Dur("timeout", beConfigs[i].Timeout).
+				Dur("interval", h.cfg.Interval).
+				Msg("Connection timeout of backend is greater than 2/3 interval. Setting timeout to 2/3 interval.")
+			beConfigs[i].Timeout = h.cfg.Interval * 2 / 3
+		} else if beConfigs[i].Timeout == 0 {
+			beConfigs[i].Timeout = h.cfg.Timeout
+		}
+		if beConfigs[i].AcceptStatusCodes == nil {
+			beConfigs[i].AcceptStatusCodes = h.cfg.AcceptStatusCodes
+		}
+		if beConfigs[i].UnhealthyThreshold == 0 {
+			beConfigs[i].UnhealthyThreshold = h.cfg.UnhealthyThreshold
+		}
+		if beConfigs[i].HealthyThreshold == 0 {
+			beConfigs[i].HealthyThreshold = h.cfg.HealthyThreshold
+		}
+	}
+
 	h.backendsMtx.Lock()
 	defer h.backendsMtx.Unlock()
 
-	for i := range backends {
-		backend := backends[i]
-		if backend, ok := h.backends[backend.Name]; ok {
+	for i := range beConfigs {
+		beCfg := beConfigs[i]
+		if backend, ok := h.backends[beCfg.Name]; ok {
 			h.cfg.logger.Warn().
-				Str("backend", backend.Name).
-				Str("url", backend.Url.String()).
+				Str("beCfg", backend.Cfg.Name).
+				Str("url", backend.Cfg.Url.String()).
 				Bool("healthy", backend.healthy).
 				Msg("Backend already exists")
 			continue
 		}
-		backend.healthy = h.cfg.HealthyInitially
-		h.backends[backend.Name] = backend
 
-		if backend.healthy {
-			h.outputChans.sendHealthy(backend.toNoti())
+		// Add BE state to the health monitor
+		be := &Backend{
+			Cfg:     beCfg,
+			healthy: h.cfg.HealthyInitially,
+		}
+		h.backends[be.Cfg.Name] = be
+
+		if be.healthy {
+			h.outputChans.sendHealthy(be.toNoti())
 		} else {
-			h.outputChans.sendUnhealthy(backend.toNoti())
+			h.outputChans.sendUnhealthy(be.toNoti())
 		}
 	}
+
+	return nil
 }
 
-func (h *healthMonitorImpl) Remove(backends ...*Backend) {
+func (h *healthMonitorImpl) Remove(backends ...string) {
 	h.backendsMtx.Lock()
 	defer h.backendsMtx.Unlock()
 
-	for _, backend := range backends {
-		if _, ok := h.backends[backend.Name]; !ok {
+	for _, name := range backends {
+		if backend, ok := h.backends[name]; !ok {
 			h.cfg.logger.Warn().
-				Str("backend", backend.Name).
-				Str("url", backend.Url.String()).
+				Str("backend", name).
+				Str("url", backend.Cfg.Url.String()).
 				Msg("Backend does not exist to remove")
 			continue
+		} else {
+			h.outputChans.sendUnhealthy(backend.toNoti(indefinite()))
+			delete(h.backends, backend.Cfg.Name)
 		}
-		h.outputChans.sendUnhealthy(backend.toNoti(indefinite()))
-		delete(h.backends, backend.Name)
 	}
 }
 
@@ -245,7 +317,7 @@ func (h *healthMonitorImpl) healthcheck(backend *Backend) (healthy bool, newly b
 	var (
 		err    error
 		logger = h.cfg.logger.With().
-			Str("backend", backend.Name).
+			Str("backend", backend.Cfg.Name).
 			Logger()
 	)
 
@@ -267,10 +339,10 @@ func (h *healthMonitorImpl) healthcheck(backend *Backend) (healthy bool, newly b
 		}
 	}()
 
-	switch h.cfg.Protocol {
+	switch backend.Cfg.Protocol {
 	case HTTP, HTTPS:
 		var statusCode int
-		statusCode, err = doHttp(h.ctx, backend.Url, h.cfg.HttpPath, h.cfg.Timeout)
+		statusCode, err = doHttp(h.ctx, backend.Cfg.Url, h.cfg.Timeout)
 		if err == nil {
 			statusStr := fmt.Sprintf("%d", statusCode)
 			ok := false
@@ -285,9 +357,9 @@ func (h *healthMonitorImpl) healthcheck(backend *Backend) (healthy bool, newly b
 			}
 		}
 	case TCP:
-		err = doTcp(backend.Url, h.cfg.Timeout)
+		err = doTcp(backend.Cfg.Url, h.cfg.Timeout)
 	case ICMP:
-		err = doIcmp(backend.Url, h.cfg.Timeout)
+		err = doIcmp(backend.Cfg.Url, h.cfg.Timeout)
 	}
 
 	// Calculate the fail/success streak

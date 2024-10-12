@@ -10,12 +10,12 @@ import (
 	"time"
 )
 
-func doHttp(ctx context.Context, url url.URL, path string, timeout time.Duration) (int, error) {
+func doHttp(ctx context.Context, url url.URL, timeout time.Duration) (int, error) {
 	client := http.Client{
 		Timeout: timeout,
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url.String()+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url.String(), nil)
 	if err != nil {
 		return 0, err
 	}
