@@ -1,6 +1,7 @@
 package chash
 
 import (
+	"hash/crc32"
 	"sort"
 	"sync"
 )
@@ -74,8 +75,8 @@ func (c *consistentHashImpl) Add(backends ...string) {
 		}{
 			id: len(c.backends),
 			// Generate offset and skip using crc32 hash
-			offset: crc32(append([]byte(backend), []byte("offset")...)) % c.Size(),
-			skip:   crc32(append([]byte(backend), []byte("skip")...))%(c.Size()-1) + 1,
+			offset: crc32.ChecksumIEEE(append([]byte(backend), []byte("offset")...)) % c.Size(),
+			skip:   crc32.ChecksumIEEE(append([]byte(backend), []byte("skip")...))%(c.Size()-1) + 1,
 		}
 	}
 
